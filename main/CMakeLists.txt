@@ -1,3 +1,3 @@
-idf_component_register(SRCS "ui_overview.c" "batmon5.c" "display.c"
+idf_component_register(SRCS "batmon5.cpp" "display.cpp" "ui_overview.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES esp_lcd esp_driver_gpio esp_driver_spi esp_driver_i2c)

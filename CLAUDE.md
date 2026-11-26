@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-batmon5 is a camper battery monitor. It is ESP-IDF firmware for the lcdwiki **ES3C28P** board: an ESP32-S3 N16R8 (16 MB quad flash, 8 MB octal PSRAM) with a 2.8" ILI9341V 240×320 SPI IPS display, FT6336G capacitive touch, ES8311 audio codec, microSD, a WS2812 LED and a battery ADC. Board reference: https://www.lcdwiki.com/2.8inch_ESP32-S3_Display (schematic: https://www.lcdwiki.com/res/ES3C28P/2.8inch_ESP32-S3_Display_Schematic.pdf).
+batmon5 is a camper battery monitor. It is ESP-IDF firmware, written in C++, for the lcdwiki **ES3C28P** board: an ESP32-S3 N16R8 (16 MB quad flash, 8 MB octal PSRAM) with a 2.8" ILI9341V 240×320 SPI IPS display, FT6336G capacitive touch, ES8311 audio codec, microSD, a WS2812 LED and a battery ADC. Board reference: https://www.lcdwiki.com/2.8inch_ESP32-S3_Display (schematic: https://www.lcdwiki.com/res/ES3C28P/2.8inch_ESP32-S3_Display_Schematic.pdf).
 
 ## Environment
 
@@ -26,6 +26,8 @@ rm sdkconfig && idf.py reconfigure        # regenerate sdkconfig after editing s
 
 There are no tests or linter yet. A build without warnings is the bar.
 
+C++ notes: ESP-IDF builds with exceptions and RTTI off, so don't use them. C++ rejects out-of-order and nested designated initializers (and ESP-IDF turns missing-field warnings into errors), so zero-initialize IDF config structs with `= {}` and assign fields, rather than using C-style `{ .a = ..., .b.c = ... }` or the components' `*_CONFIG()` macros.
+
 ## Configuration
 
 - `sdkconfig.defaults` is the source of truth for project settings (flash size and mode, octal PSRAM, custom partitions, USB-JTAG console, LVGL fonts). `sdkconfig` is generated and git-ignored. Put lasting changes in `sdkconfig.defaults`, not only in menuconfig.
@@ -34,11 +36,11 @@ There are no tests or linter yet. A build without warnings is the bar.
 
 ## Architecture
 
-- `main/board.h` holds every GPIO and panel quirk for the board. Add new hardware pins here, never inline. It also has the display tuning switches (`BOARD_LCD_INVERT_COLOR`, `BOARD_LCD_BGR_ORDER`, `BOARD_LCD_LANDSCAPE`, `BOARD_LCD_MIRROR_X/Y`). These haven't been checked on real hardware yet. The touch controller uses the same rotation and mirror flags, so the display and touch always change together.
-- `main/display.c` (`display_init()`) starts the backlight (GPIO, held off until init finishes), the ILI9341 on SPI2, the FT6336 on the new `i2c_master` driver (I2C0), and the `esp_lvgl_port` task, and registers touch as an LVGL input device. If touch fails to start, it only logs a warning.
-- `main/batmon5.c`: `app_main()` calls `display_init()`, builds the overview screen and fills it with sample values (no sensors yet).
-- `main/ui_overview.c`: the overview screen, built from `docs/ui/overview.svg` using absolute SVG coordinates (labels are placed by baseline). Update values with `ui_overview_set_battery()`, `_set_solar()` and `_set_water()`. These take the LVGL lock themselves, and NAN or a negative percentage shows "--".
-- LVGL runs in the esp_lvgl_port task. **Any LVGL call made from another task must be wrapped in `lvgl_port_lock(0)` / `lvgl_port_unlock()`.**
+- `main/board.hpp` holds every GPIO and panel quirk for the board as `constexpr` constants in namespace `board`. Add new hardware pins here, never inline. It also has the display tuning switches (`kLcdInvertColor`, `kLcdBgrOrder`, `kLcdLandscape`, `kLcdMirrorX/Y`). These haven't been checked on real hardware yet. The touch controller uses the same rotation and mirror flags, so the display and touch always change together.
+- `main/display.cpp` (`display::init()`) starts the backlight (GPIO, held off until init finishes), the ILI9341 on SPI2, the FT6336 on the new `i2c_master` driver (I2C0), and the `esp_lvgl_port` task, and registers touch as an LVGL input device. If touch fails to start, it only logs a warning.
+- `main/batmon5.cpp`: `extern "C" app_main()` calls `display::init()`, builds the overview screen and fills it with sample values (no sensors yet).
+- `main/ui_overview.cpp`: `ui::OverviewScreen`, built from `docs/ui/overview.svg` using absolute SVG coordinates (labels are placed by baseline). Update values with `set_battery()`, `set_solar()` and `set_water()`. These take the LVGL lock themselves, and an empty `std::optional` (or a null status) shows "--".
+- LVGL runs in the esp_lvgl_port task. **Any LVGL call made from another task must hold the lock: use the RAII guard `LvglLock` (`main/lvgl_lock.hpp`), which wraps `lvgl_port_lock(0)` / `lvgl_port_unlock()`.**
 
 ## Hardware constraints
 

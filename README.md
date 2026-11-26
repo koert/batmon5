@@ -1,6 +1,6 @@
 # batmon5
 
-Battery monitor for a camper, built on the lcdwiki **ES3C28P** board: an
+Battery monitor for a camper, written in C++ on ESP-IDF and built on the lcdwiki **ES3C28P** board: an
 ESP32-S3 with a 2.8" touchscreen.
 
 > **Status:** early bring-up. The firmware shows the overview screen
@@ -19,7 +19,7 @@ ESP32-S3 with a 2.8" touchscreen.
 - Board page: <https://www.lcdwiki.com/2.8inch_ESP32-S3_Display>
 - Schematic: <https://www.lcdwiki.com/res/ES3C28P/2.8inch_ESP32-S3_Display_Schematic.pdf>
 
-All pin assignments are in [main/board.h](main/board.h). The free GPIOs on the
+All pin assignments are in [main/board.hpp](main/board.hpp). The free GPIOs on the
 expansion connector are IO2, IO3, IO14 and IO21.
 
 ## Building
@@ -63,9 +63,9 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0 firmware-backup/factory.
   with `rm sdkconfig && idf.py reconfigure`.
 - [partitions.csv](partitions.csv) defines two 4 MB OTA app slots and a
   ~7.9 MB LittleFS `storage` partition.
-- Display tuning flags in [main/board.h](main/board.h):
-  `BOARD_LCD_INVERT_COLOR`, `BOARD_LCD_BGR_ORDER`, `BOARD_LCD_LANDSCAPE`,
-  `BOARD_LCD_MIRROR_X` and `BOARD_LCD_MIRROR_Y`. Touch uses the same rotation
+- Display tuning flags in [main/board.hpp](main/board.hpp):
+  `kLcdInvertColor`, `kLcdBgrOrder`, `kLcdLandscape`, `kLcdMirrorX` and
+  `kLcdMirrorY`. Touch uses the same rotation
   and mirror settings, so the display and touch stay aligned. On the overview
   screen, the SOC arc and battery power should be green, the solar icon yellow
   and the fresh-water bar blue.
@@ -74,15 +74,17 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0 firmware-backup/factory.
 
 ```
 main/
-  batmon5.c        app_main()
-  ui_overview.c/.h overview screen (battery, solar, water)
-  display.c/.h     backlight, ILI9341 (SPI2), FT6336 touch (I2C0), LVGL port
-  board.h          board pins and panel settings
+  batmon5.cpp          app_main()
+  ui_overview.cpp/.hpp overview screen (battery, solar, water)
+  display.cpp/.hpp     backlight, ILI9341 (SPI2), FT6336 touch (I2C0), LVGL port
+  lvgl_lock.hpp        RAII guard for the LVGL port lock
+  board.hpp            board pins and panel settings
   idf_component.yml
-docs/ui/           screen designs (SVG)
+docs/ui/               screen designs (SVG)
 partitions.csv
 sdkconfig.defaults
 ```
 
 LVGL runs in its own task, started by esp_lvgl_port. Any LVGL call made from
-another task has to be wrapped in `lvgl_port_lock(0)` / `lvgl_port_unlock()`.
+another task has to hold the lock, using the `LvglLock` guard from
+`main/lvgl_lock.hpp`.
