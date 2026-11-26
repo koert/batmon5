@@ -226,20 +226,20 @@ static void battery_card_create(lv_obj_t *scr)
     lv_obj_set_style_text_letter_space(title, 1, 0);
 
     /* SOC arc: 270 degrees, open at the bottom; centre (82,86),
-     * radius 52 to the middle of the 12 px stroke. */
+     * radius 52 to the middle of the 10 px stroke. */
     lv_obj_t *arc = lv_arc_create(scr);
     lv_obj_remove_style_all(arc);
-    lv_obj_set_pos(arc, 82 - 58, 86 - 58);
-    lv_obj_set_size(arc, 116, 116);
+    lv_obj_set_pos(arc, 82 - 57, 86 - 57);
+    lv_obj_set_size(arc, 114, 114);
     lv_arc_set_rotation(arc, 0);
     lv_arc_set_bg_angles(arc, 135, 45);
     lv_arc_set_range(arc, 0, 100);
     lv_arc_set_value(arc, 0);
     lv_obj_set_clickable(arc, false);
-    lv_obj_set_style_arc_width(arc, 12, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 10, LV_PART_MAIN);
     lv_obj_set_style_arc_color(arc, lv_color_hex(COL_TRACK), LV_PART_MAIN);
     lv_obj_set_style_arc_rounded(arc, true, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 12, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc, 10, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc, lv_color_hex(COL_OK), LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(arc, true, LV_PART_INDICATOR);
     ui.soc_arc = arc;

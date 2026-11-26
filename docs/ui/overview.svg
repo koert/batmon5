@@ -25,9 +25,9 @@
 
   <!-- SOC arc: 270 degrees, open at the bottom (LVGL lv_arc default) -->
   <!-- circumference 2*pi*52 = 326.7; 270deg = 245.0; 78% of 270deg = 191.1 -->
-  <circle cx="82" cy="86" r="52" fill="none" stroke="#2A323C" stroke-width="12"
+  <circle cx="82" cy="86" r="52" fill="none" stroke="#2A323C" stroke-width="10"
           stroke-linecap="round" stroke-dasharray="245.0 326.7" transform="rotate(135 82 86)"/>
-  <circle cx="82" cy="86" r="52" fill="none" stroke="#3DDC84" stroke-width="12"
+  <circle cx="82" cy="86" r="52" fill="none" stroke="#3DDC84" stroke-width="10"
           stroke-linecap="round" stroke-dasharray="191.1 326.7" transform="rotate(135 82 86)"/>
   <text x="82" y="99" font-size="36" font-weight="700" fill="#FFFFFF" text-anchor="middle">78<tspan font-size="24" fill="#9AA5B1">%</tspan></text>
   <text x="82" y="138" font-size="14" font-weight="600" fill="#9AA5B1" text-anchor="middle">SOC</text>
