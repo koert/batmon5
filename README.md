@@ -3,9 +3,9 @@
 Battery monitor for a camper, built on the lcdwiki **ES3C28P** board: an
 ESP32-S3 with a 2.8" touchscreen.
 
-> **Status:** early bring-up. The firmware starts the display and touch and
-> shows a test screen: a voltage placeholder, a red/green/blue colour bar and
-> the current touch coordinates. It does not measure anything yet.
+> **Status:** early bring-up. The firmware shows the overview screen
+> (battery, solar, water tanks; design in [docs/ui/overview.svg](docs/ui/overview.svg))
+> with sample values. No sensors are connected yet.
 
 ## Hardware
 
@@ -66,17 +66,20 @@ esptool.py --chip esp32s3 -p /dev/ttyACM0 write_flash 0 firmware-backup/factory.
 - Display tuning flags in [main/board.h](main/board.h):
   `BOARD_LCD_INVERT_COLOR`, `BOARD_LCD_BGR_ORDER`, `BOARD_LCD_LANDSCAPE`,
   `BOARD_LCD_MIRROR_X` and `BOARD_LCD_MIRROR_Y`. Touch uses the same rotation
-  and mirror settings, so the display and touch stay aligned. On the test
-  screen, the colour bar should read red, green, blue from left to right.
+  and mirror settings, so the display and touch stay aligned. On the overview
+  screen, the SOC arc and battery power should be green, the solar icon yellow
+  and the fresh-water bar blue.
 
 ## Project layout
 
 ```
 main/
-  batmon5.c        app_main() and the UI
+  batmon5.c        app_main()
+  ui_overview.c/.h overview screen (battery, solar, water)
   display.c/.h     backlight, ILI9341 (SPI2), FT6336 touch (I2C0), LVGL port
   board.h          board pins and panel settings
   idf_component.yml
+docs/ui/           screen designs (SVG)
 partitions.csv
 sdkconfig.defaults
 ```

@@ -36,7 +36,8 @@ There are no tests or linter yet. A build without warnings is the bar.
 
 - `main/board.h` holds every GPIO and panel quirk for the board. Add new hardware pins here, never inline. It also has the display tuning switches (`BOARD_LCD_INVERT_COLOR`, `BOARD_LCD_BGR_ORDER`, `BOARD_LCD_LANDSCAPE`, `BOARD_LCD_MIRROR_X/Y`). These haven't been checked on real hardware yet. The touch controller uses the same rotation and mirror flags, so the display and touch always change together.
 - `main/display.c` (`display_init()`) starts the backlight (GPIO, held off until init finishes), the ILI9341 on SPI2, the FT6336 on the new `i2c_master` driver (I2C0), and the `esp_lvgl_port` task, and registers touch as an LVGL input device. If touch fails to start, it only logs a warning.
-- `main/batmon5.c`: `app_main()` calls `display_init()` and then builds the UI. The UI is currently a test screen with a voltage placeholder, a red/green/blue colour bar and a touch-coordinate label.
+- `main/batmon5.c`: `app_main()` calls `display_init()`, builds the overview screen and fills it with sample values (no sensors yet).
+- `main/ui_overview.c`: the overview screen, built from `docs/ui/overview.svg` using absolute SVG coordinates (labels are placed by baseline). Update values with `ui_overview_set_battery()`, `_set_solar()` and `_set_water()`. These take the LVGL lock themselves, and NAN or a negative percentage shows "--".
 - LVGL runs in the esp_lvgl_port task. **Any LVGL call made from another task must be wrapped in `lvgl_port_lock(0)` / `lvgl_port_unlock()`.**
 
 ## Hardware constraints
