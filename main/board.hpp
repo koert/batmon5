@@ -48,6 +48,16 @@ inline constexpr bool kLcdMirrorY = false;
 inline constexpr bool kTouchFlipNativeX = true;
 inline constexpr bool kTouchFlipNativeY = false;
 
+/* Touch calibration, in screen coordinates after the flips and the landscape swap:
+ * two reference points per axis, where the touch reported `raw` for a tap on `screen`.
+ * Measured on the hardware by tapping crosshairs at x/y = 20 and 300/220: without it,
+ * touch is squeezed toward the middle (a tap at y=20 reported y=46). */
+struct TouchAxisCal {
+    int32_t raw_a, screen_a, raw_b, screen_b;
+};
+inline constexpr TouchAxisCal kTouchCalX = {31, 20, 294, 300};
+inline constexpr TouchAxisCal kTouchCalY = {46, 20, 214, 220};
+
 inline constexpr i2c_port_num_t kI2cPort = I2C_NUM_0;
 inline constexpr gpio_num_t kI2cPinSda = GPIO_NUM_16;
 inline constexpr gpio_num_t kI2cPinScl = GPIO_NUM_15;

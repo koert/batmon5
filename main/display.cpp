@@ -25,6 +25,32 @@ constexpr int kVRes = board::kLcdLandscape ? board::kLcdNativeHRes : board::kLcd
 /* LVGL draw buffer: 1/10 of the screen, double-buffered in DMA-capable RAM. */
 constexpr int kDrawBufLines = 24;
 
+/* Linear map from touch to screen coordinate through the two reference points. */
+int32_t calibrate(int32_t raw, const board::TouchAxisCal &cal, int32_t size)
+{
+    const int32_t v = cal.screen_a + (raw - cal.raw_a) * (cal.screen_b - cal.screen_a) /
+                                         (cal.raw_b - cal.raw_a);
+    return v < 0 ? 0 : v >= size ? size - 1 : v;
+}
+
+/* Called by esp_lcd_touch with the controller's native (portrait) coordinates:
+ * apply the display's mirror flags plus the touch-only flips, swap to landscape,
+ * then calibrate. */
+void touch_process(esp_lcd_touch_handle_t, uint16_t *x, uint16_t *y, uint16_t *, uint8_t *point_num,
+                   uint8_t)
+{
+    constexpr bool kMirrorX = board::kLcdMirrorX != board::kTouchFlipNativeX;
+    constexpr bool kMirrorY = board::kLcdMirrorY != board::kTouchFlipNativeY;
+    for (uint8_t i = 0; i < *point_num; i++) {
+        int32_t nx = kMirrorX ? board::kLcdNativeHRes - x[i] : x[i];
+        int32_t ny = kMirrorY ? board::kLcdNativeVRes - y[i] : y[i];
+        const int32_t sx = board::kLcdLandscape ? ny : nx;
+        const int32_t sy = board::kLcdLandscape ? nx : ny;
+        x[i] = static_cast<uint16_t>(calibrate(sx, board::kTouchCalX, kHRes));
+        y[i] = static_cast<uint16_t>(calibrate(sy, board::kTouchCalY, kVRes));
+    }
+}
+
 esp_err_t backlight_init()
 {
     gpio_config_t cfg = {};
@@ -96,6 +122,8 @@ esp_err_t touch_init(esp_lcd_touch_handle_t *out_touch)
     esp_lcd_panel_io_handle_t tp_io;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(bus, &tp_io_cfg, &tp_io), TAG, "touch io");
 
+    /* Flips, landscape swap and calibration are all done in touch_process(); the
+     * driver's own mirror/swap flags stay off. */
     esp_lcd_touch_config_t tp_cfg = {};
     tp_cfg.x_max = board::kLcdNativeHRes;
     tp_cfg.y_max = board::kLcdNativeVRes;
@@ -103,9 +131,7 @@ esp_err_t touch_init(esp_lcd_touch_handle_t *out_touch)
     tp_cfg.int_gpio_num = board::kTouchPinInt;
     tp_cfg.levels.reset = 0;
     tp_cfg.levels.interrupt = 0;
-    tp_cfg.flags.swap_xy = board::kLcdLandscape;
-    tp_cfg.flags.mirror_x = board::kLcdMirrorX != board::kTouchFlipNativeX;
-    tp_cfg.flags.mirror_y = board::kLcdMirrorY != board::kTouchFlipNativeY;
+    tp_cfg.process_coordinates = touch_process;
     return esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, out_touch);
 }
 
