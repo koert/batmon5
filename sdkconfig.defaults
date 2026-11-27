@@ -26,6 +26,10 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_36=y
 CONFIG_LV_FONT_MONTSERRAT_40=y
+# LVGL objects on the system heap (internal RAM + PSRAM) instead of a fixed 64 KB pool:
+# the screens together don't fit in the pool
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_ASSERT_MALLOC=y
 
 # Bluetooth: NimBLE host, central role (JK BMS client)
 CONFIG_BT_ENABLED=y

@@ -30,7 +30,7 @@ C++ notes: ESP-IDF builds with exceptions and RTTI off, so don't use them. C++ r
 
 ## Configuration
 
-- `sdkconfig.defaults` is the source of truth for project settings (flash size and mode, octal PSRAM, custom partitions, USB-JTAG console, LVGL fonts). `sdkconfig` is generated and git-ignored. Put lasting changes in `sdkconfig.defaults`, not only in menuconfig.
+- `sdkconfig.defaults` is the source of truth for project settings (flash size and mode, octal PSRAM, custom partitions, USB-JTAG console, LVGL fonts, LVGL on the system heap, NimBLE). `sdkconfig` is generated and git-ignored. Put lasting changes in `sdkconfig.defaults`, not only in menuconfig.
 - `partitions.csv`: two 4 MB OTA slots (`ota_0` and `ota_1`, for future OTA updates) plus a ~7.9 MB `storage` partition of type littlefs.
 - Third-party components come from the ESP Component Registry through `main/idf_component.yml`. They are pinned in `dependencies.lock` and downloaded into `managed_components/` (git-ignored; never edit them there). Current versions: LVGL 9.6.0, esp_lvgl_port 2.9.1, esp_lcd_ili9341 2.1.0, esp_lcd_touch_ft5x06 1.1.1 (used for the FT6336). This is the LVGL **v9** API, and older APIs are deprecated in 9.6 (for example, use `lv_obj_set_clickable()` instead of `lv_obj_add_flag(..., LV_OBJ_FLAG_CLICKABLE)`).
 
@@ -38,8 +38,14 @@ C++ notes: ESP-IDF builds with exceptions and RTTI off, so don't use them. C++ r
 
 - `main/board.hpp` holds every GPIO and panel quirk for the board as `constexpr` constants in namespace `board`. Add new hardware pins here, never inline. It also has the display tuning switches (`kLcdInvertColor`, `kLcdBgrOrder`, `kLcdLandscape`, `kLcdMirrorX/Y`). These haven't been checked on real hardware yet. The touch controller uses the same rotation and mirror flags, so the display and touch always change together.
 - `main/display.cpp` (`display::init()`) starts the backlight (GPIO, held off until init finishes), the ILI9341 on SPI2, the FT6336 on the new `i2c_master` driver (I2C0), and the `esp_lvgl_port` task, and registers touch as an LVGL input device. If touch fails to start, it only logs a warning.
-- `main/batmon5.cpp`: `extern "C" app_main()` calls `display::init()`, builds the overview screen and fills it with sample values (no sensors yet).
-- `main/ui_overview.cpp`: `ui::OverviewScreen`, built from `docs/ui/overview.svg` using absolute SVG coordinates (labels are placed by baseline). Update values with `set_battery()`, `set_solar()` and `set_water()`. These take the LVGL lock themselves, and an empty `std::optional` (or a null status) shows "--".
+- `main/batmon5.cpp`: `extern "C" app_main()` initializes NVS and the display, builds the UI (`ui::App`), starts the JK BMS client with the saved selection, and every 500 ms passes the battery data to the overview and to `App::update()`. Solar and water still show sample values.
+- `components/jk_bms`: JK BMS BLE client (`JKBmsBle`, esp-nimble-cpp), ported from batmon4. Up to `JKBmsBle::kMaxBatteries` (2) batteries; battery slot i = selected device i. It monitors the devices passed to `begin()`/`setSelection()` (matched by BLE address), or, when no selection was ever saved, the first devices named `CONFIG_JK_BMS_NAME_PREFIX` ("Accu"). Every JK BMS seen by a scan is listed by `getFoundDevices()`; `requestDiscovery()` starts a full scan. All public methods are safe to call from any task.
+- `main/bms_settings.cpp`: loads/saves the BMS selection in NVS (namespace "bms").
+- UI (`main/ui_*.cpp`), designs in `docs/ui/`:
+  - `ui_app.cpp`: `ui::App` owns all screens and the navigation: overview → (tap battery card) battery list → (tap card) battery details (< > pages through the batteries); the list's gear button opens the BMS selection.
+  - `ui_overview.cpp`: `ui::OverviewScreen`, built from `docs/ui/overview.svg` using absolute SVG coordinates (labels are placed by baseline). Update values with `set_battery()`, `set_solar()` and `set_water()`. These take the LVGL lock themselves, and an empty `std::optional` (or a null status) shows "--".
+  - `ui_battery.cpp` (battery list and details) and `ui_bms_select.cpp` (BMS selection) follow `docs/ui/battery-detail.html` and use LVGL flex layout. Their methods expect the LVGL lock to be held; `App` takes it.
+  - `ui_common.cpp`: palette, fonts and widget helpers shared by the flex screens.
 - LVGL runs in the esp_lvgl_port task. **Any LVGL call made from another task must hold the lock: use the RAII guard `LvglLock` (`main/lvgl_lock.hpp`), which wraps `lvgl_port_lock(0)` / `lvgl_port_unlock()`.**
 
 ## Hardware constraints

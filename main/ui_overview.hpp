@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 #include "lvgl.h"
@@ -15,8 +16,14 @@ namespace ui {
  */
 class OverviewScreen {
 public:
-    /** Build the screen on the active display. Call once after display::init(). */
-    void create();
+    /**
+     * Build the screen and show it. Call once after display::init().
+     * @param on_battery_click called (in the LVGL task) when the battery card is tapped
+     */
+    void create(std::function<void()> on_battery_click = {});
+
+    /** The screen object, for lv_screen_load(). */
+    lv_obj_t *screen() const { return screen_; }
 
     /**
      * @param soc_pct   state of charge, 0..100
@@ -65,6 +72,8 @@ private:
     void create_water_card(lv_obj_t *scr);
     static void set_tank(ValueLabel &label, lv_obj_t *bar, std::optional<int> pct);
 
+    lv_obj_t *screen_ = nullptr;
+    std::function<void()> on_battery_click_;
     lv_obj_t *soc_arc_ = nullptr;
     lv_obj_t *batt_icon_fill_ = nullptr;
     ValueLabel soc_;

@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -26,6 +27,7 @@
 #include "NimBLEDevice.h"
 
 #include "jk_bms/battery_data.hpp"
+#include "jk_bms/bms_device.hpp"
 
 // Per-BMS connection state
 struct BmsConnection {
@@ -66,8 +68,25 @@ public:
 
     JKBmsBle();
 
-    // Initialize BLE and start scanning for BMS devices named CONFIG_JK_BMS_NAME_PREFIX...
-    bool begin(BatteryData* batteries, uint8_t maxBatteries);
+    // Initialize BLE and start scanning.
+    // selection: the BMS devices to monitor (battery slot i = selection[i]). nullptr = no selection
+    // saved yet: monitor the first devices whose name starts with CONFIG_JK_BMS_NAME_PREFIX.
+    bool begin(BatteryData* batteries, uint8_t maxBatteries,
+               const std::vector<BmsDeviceId>* selection = nullptr);
+
+    // Monitor exactly these devices from now on (at most kMaxBatteries; safe to call from any
+    // task, applied by the BMS task). Current connections are closed and battery values cleared.
+    void setSelection(const std::vector<BmsDeviceId>& devices);
+
+    // The devices currently monitored, in battery slot order (any task)
+    std::vector<BmsDeviceId> getMonitoredDevices();
+
+    // Start a full discovery scan (any task): every JK BMS in range ends up in getFoundDevices()
+    void requestDiscovery() { _discoveryRequested = true; }
+    bool isScanning() const { return _scanning || _discoveryRequested; }
+
+    // JK BMS devices seen by any scan since boot, oldest first (any task)
+    std::vector<FoundBms> getFoundDevices();
 
     // Run loop() in its own FreeRTOS task so blocking BLE calls never stall the UI.
     // Call after begin().
@@ -129,6 +148,11 @@ private:
     int findFreeConnectionSlot();
     void startScan();
     void stopScanIfAllSlotsKnown();
+    void recordFound(const NimBLEAddress& address, const std::string& name, int8_t rssi);
+    uint8_t targetCount() const;  // number of batteries that should be connected
+
+    // Selection (bms task)
+    void applySelection(const std::vector<BmsDeviceId>& devices);
 
     // Monitoring on/off (bms task)
     void stopMonitoring();    // stop scan, disconnect all, clear values
@@ -148,8 +172,27 @@ private:
     SemaphoreHandle_t _dataMutex = nullptr;
     TaskHandle_t _task = nullptr;
 
+    // Selection: false = auto-assign devices by name prefix, true = only the selected devices.
+    // _monitored mirrors the slots' devices for the UI; guarded by _dataMutex like the selection.
+    bool _selectionMode = false;
+    std::vector<BmsDeviceId> _monitored;
+    std::vector<BmsDeviceId> _pendingSelection;
+    volatile bool _selectionPending = false;
+
+    // Devices seen by the scan, guarded by _foundMutex (written by the NimBLE host task)
+    struct FoundEntry {
+        BmsDeviceId id;
+        int8_t rssi = 0;
+        uint32_t lastSeen = 0;
+    };
+    static constexpr size_t kMaxFound = 16;
+    std::vector<FoundEntry> _found;
+    SemaphoreHandle_t _foundMutex = nullptr;
+
     uint32_t _lastScanTime = 0;
     volatile bool _scanning = false;          // cleared by the scan-end callback (NimBLE host task)
+    volatile bool _discoveryRequested = false;  // set by the UI, started by the bms task
+    volatile bool _discoveryScan = false;     // the running scan is a full discovery: no early stop
     volatile bool _monitoringEnabled = true;  // requested state, set by the UI
     bool _monitoringStopped = false;          // applied state, only touched by the BMS task
 };

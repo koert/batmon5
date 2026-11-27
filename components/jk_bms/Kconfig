@@ -4,7 +4,8 @@ menu "JK BMS"
         string "BMS device name prefix"
         default "Accu"
         help
-            Only BLE devices whose advertised name starts with this text are
+            Used only until a BMS selection is saved on the BMS selection screen:
+            then the BLE devices whose advertised name starts with this text are
             treated as batteries. Set the names in the JK BMS app.
 
     config JK_BMS_BLE_DEVICE_NAME

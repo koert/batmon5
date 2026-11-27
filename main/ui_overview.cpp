@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace ui {
 namespace {
@@ -300,12 +301,13 @@ void OverviewScreen::create_water_card(lv_obj_t *scr)
 /* Public API                                                               */
 /* ------------------------------------------------------------------------ */
 
-void OverviewScreen::create()
+void OverviewScreen::create(std::function<void()> on_battery_click)
 {
+    on_battery_click_ = std::move(on_battery_click);
     {
         LvglLock lock;
-        lv_obj_t *scr = lv_screen_active();
-        lv_obj_clean(scr);
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        screen_ = scr;
         lv_obj_set_style_bg_color(scr, lv_color_hex(kColBg), 0);
         lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
         lv_obj_set_scrollable(scr, false);
@@ -313,6 +315,24 @@ void OverviewScreen::create()
         create_battery_card(scr);
         create_solar_card(scr);
         create_water_card(scr);
+
+        /* Transparent touch area over the battery card, on top of its labels: opens the
+         * battery list. Lightens the card a little while pressed. */
+        lv_obj_t *touch = rect_create(scr, 6, 6, 152, 228, kColValue, 8);
+        lv_obj_set_style_bg_opa(touch, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_bg_opa(touch, LV_OPA_10, LV_STATE_PRESSED);
+        lv_obj_set_clickable(touch, true);
+        lv_obj_add_event_cb(
+            touch,
+            [](lv_event_t *e) {
+                auto *self = static_cast<OverviewScreen *>(lv_event_get_user_data(e));
+                if (self->on_battery_click_) {
+                    self->on_battery_click_();
+                }
+            },
+            LV_EVENT_CLICKED, this);
+
+        lv_screen_load(scr);
     }
 
     /* Start with every value unknown. */

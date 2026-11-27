@@ -38,6 +38,7 @@ constexpr uint32_t kScanDurationMs      = 10000;   // short non-blocking scans..
 constexpr uint32_t kRescanInterval      = 30000;   // ...repeated only while a battery is missing
 constexpr uint32_t kDataRequestInterval = 15000;
 constexpr uint32_t kDataExpiryMs        = 300000;  // clear a battery's values 5 min after its last data
+constexpr uint32_t kConnectTimeoutMs    = 5000;
 
 // Bytes of notification data buffered between the NimBLE host task and the bms task
 constexpr size_t kRxStreamSize = 2048;
@@ -121,11 +122,16 @@ JKBmsBle::JKBmsBle() {
     }
 }
 
-bool JKBmsBle::begin(BatteryData* batteries, uint8_t maxBatteries) {
+bool JKBmsBle::begin(BatteryData* batteries, uint8_t maxBatteries,
+                     const std::vector<BmsDeviceId>* selection) {
     _batteries = batteries;
     _maxBatteries = std::min(maxBatteries, kMaxBatteries);
     if (!_dataMutex) {
         _dataMutex = xSemaphoreCreateMutex();
+    }
+    if (!_foundMutex) {
+        _foundMutex = xSemaphoreCreateMutex();
+        _found.reserve(kMaxFound);
     }
     for (uint8_t i = 0; i < kMaxBatteries; i++) {
         if (!_connections[i].rxStream) {
@@ -147,10 +153,94 @@ bool JKBmsBle::begin(BatteryData* batteries, uint8_t maxBatteries) {
     _pScan->setInterval(100);
     _pScan->setWindow(99);
 
-    if (_monitoringEnabled) {
-        startScan();
+    if (selection) {
+        applySelection(*selection);  // starts the scan when it selects anything
+    } else {
+        ESP_LOGI(TAG, "No BMS selection saved: monitoring devices named '%s...'",
+                 CONFIG_JK_BMS_NAME_PREFIX);
+        if (_monitoringEnabled) {
+            startScan();
+        }
     }
     return true;
+}
+
+void JKBmsBle::setSelection(const std::vector<BmsDeviceId>& devices) {
+    if (!_dataMutex) return;
+    xSemaphoreTake(_dataMutex, portMAX_DELAY);
+    _pendingSelection = devices;
+    if (_pendingSelection.size() > _maxBatteries) _pendingSelection.resize(_maxBatteries);
+    _monitored = _pendingSelection;  // report the new selection right away
+    _selectionPending = true;
+    xSemaphoreGive(_dataMutex);
+}
+
+std::vector<BmsDeviceId> JKBmsBle::getMonitoredDevices() {
+    std::vector<BmsDeviceId> result;
+    if (!_dataMutex) return result;
+    xSemaphoreTake(_dataMutex, portMAX_DELAY);
+    result = _monitored;
+    xSemaphoreGive(_dataMutex);
+    return result;
+}
+
+std::vector<FoundBms> JKBmsBle::getFoundDevices() {
+    std::vector<FoundBms> result;
+    if (!_foundMutex) return result;
+    xSemaphoreTake(_foundMutex, portMAX_DELAY);
+    uint32_t now = now_ms();
+    result.reserve(_found.size());
+    for (const FoundEntry& entry : _found) {
+        FoundBms found;
+        found.id = entry.id;
+        found.rssi = entry.rssi;
+        found.ageMs = now - entry.lastSeen;
+        result.push_back(found);
+    }
+    xSemaphoreGive(_foundMutex);
+    return result;
+}
+
+// bms task (or begin(), before the task runs)
+void JKBmsBle::applySelection(const std::vector<BmsDeviceId>& devices) {
+    if (_scanning) {
+        _pScan->stop();
+        _scanning = false;
+    }
+    _discoveryScan = false;
+    for (uint8_t i = 0; i < _numConnections; i++) {
+        disconnect(i);
+        _connections[i].connectPending = false;
+    }
+    _numConnections = 0;
+
+    uint8_t count = std::min<size_t>(devices.size(), _maxBatteries);
+    uint32_t now = now_ms();
+    for (uint8_t i = 0; i < count; i++) {
+        BmsConnection& conn = _connections[i];
+        conn.address = NimBLEAddress(devices[i].address, devices[i].addressType);
+        conn.name = devices[i].name;
+        conn.connectionState = BmsConnection::State::DISCONNECTED;
+        conn.connectPending = false;   // connect once the scan has seen it...
+        conn.lastReconnectAttempt = now;  // ...or at the next periodic retry
+        ESP_LOGI(TAG, "[BMS%d] Selected '%s' %s", i, conn.name.c_str(), devices[i].address.c_str());
+    }
+    _selectionMode = true;
+
+    xSemaphoreTake(_dataMutex, portMAX_DELAY);
+    _monitored.assign(devices.begin(), devices.begin() + count);
+    if (_batteries) {
+        for (uint8_t i = 0; i < _maxBatteries; i++) {
+            _batteries[i] = BatteryData();
+            if (i < count) _batteries[i].bmsName = devices[i].name;
+        }
+    }
+    xSemaphoreGive(_dataMutex);
+
+    _numConnections = count;
+    if (count > 0 && _monitoringEnabled) {
+        startScan();
+    }
 }
 
 bool JKBmsBle::startTask(BaseType_t core) {
@@ -205,6 +295,27 @@ void JKBmsBle::loop() {
     if (_monitoringStopped) {
         _monitoringStopped = false;
         resumeMonitoring();
+    }
+
+    // New selection from the UI
+    if (_selectionPending) {
+        xSemaphoreTake(_dataMutex, portMAX_DELAY);
+        std::vector<BmsDeviceId> selection = _pendingSelection;
+        _selectionPending = false;
+        xSemaphoreGive(_dataMutex);
+        applySelection(selection);
+    }
+
+    // Discovery scan requested by the UI: restart any running scan as a full-length one
+    if (_discoveryRequested) {
+        if (_scanning) {
+            _pScan->stop();
+            _scanning = false;
+        }
+        _discoveryScan = true;
+        _discoveryRequested = false;
+        startScan();
+        if (!_scanning) _discoveryScan = false;
     }
 
     uint32_t now = now_ms();
@@ -281,7 +392,7 @@ void JKBmsBle::loop() {
 
     // Rescan while a battery is missing (slot unassigned or disconnected) to pick up
     // new or re-addressed devices; no scanning once all batteries are connected
-    if (!_scanning && getConnectedCount() < _maxBatteries) {
+    if (!_scanning && getConnectedCount() < targetCount()) {
         bool anyPending = false;
         for (uint8_t i = 0; i < _numConnections; i++) {
             if (_connections[i].connectPending) anyPending = true;
@@ -315,6 +426,11 @@ void JKBmsBle::checkHealth(uint8_t connIndex, uint32_t now) {
         ESP_LOGW(TAG, "[BMS%d] BLE client disconnected", conn.batteryIndex);
         disconnect(connIndex);
     }
+}
+
+uint8_t JKBmsBle::targetCount() const {
+    // Selection: every selected device; name prefix: as many as there are battery slots
+    return _selectionMode ? _numConnections : _maxBatteries;
 }
 
 uint8_t JKBmsBle::getConnectedCount() const {
@@ -369,7 +485,7 @@ void JKBmsBle::resumeMonitoring() {
     for (uint8_t i = 0; i < _numConnections; i++) {
         _connections[i].connectPending = true;
     }
-    if (_numConnections < _maxBatteries) {
+    if (_numConnections < targetCount()) {
         startScan();
     }
 }
@@ -389,13 +505,47 @@ void JKBmsBle::startScan() {
 
 void JKBmsBle::ScanCallbacks::onScanEnd(const NimBLEScanResults& results, int reason) {
     _parent->_scanning = false;
+    _parent->_discoveryScan = false;
 }
 
+// Stop the scan early once every battery that should be connected is known and either connected
+// or waiting to connect (loop() only connects while not scanning). Discovery scans run to the end.
 void JKBmsBle::stopScanIfAllSlotsKnown() {
-    if (_scanning && _numConnections >= _maxBatteries) {
-        _pScan->stop();
-        _scanning = false;
+    if (!_scanning || _discoveryScan) return;
+    if (!_selectionMode && _numConnections < _maxBatteries) return;
+    for (uint8_t i = 0; i < _numConnections; i++) {
+        if (!_connections[i].connected && !_connections[i].connectPending) return;
     }
+    _pScan->stop();
+    _scanning = false;
+}
+
+// NimBLE host task: remember every JK BMS for the selection screen
+void JKBmsBle::recordFound(const NimBLEAddress& address, const std::string& name, int8_t rssi) {
+    if (!_foundMutex) return;
+    std::string addr = address.toString();
+    xSemaphoreTake(_foundMutex, portMAX_DELAY);
+    FoundEntry* entry = nullptr;
+    for (FoundEntry& e : _found) {
+        if (e.id.address == addr) entry = &e;
+    }
+    if (!entry) {
+        if (_found.size() >= kMaxFound) {
+            // Full: replace the device that was seen longest ago
+            entry = &*std::min_element(_found.begin(), _found.end(),
+                [](const FoundEntry& a, const FoundEntry& b) { return a.lastSeen < b.lastSeen; });
+        } else {
+            _found.emplace_back();
+            entry = &_found.back();
+        }
+        *entry = FoundEntry();
+        entry->id.address = addr;
+        entry->id.addressType = address.getType();
+    }
+    if (!name.empty()) entry->id.name = name;  // advertisements without scan response have no name
+    entry->rssi = rssi;
+    entry->lastSeen = now_ms();
+    xSemaphoreGive(_foundMutex);
 }
 
 int JKBmsBle::findConnectionByAddress(const NimBLEAddress& address) {
@@ -411,18 +561,18 @@ int JKBmsBle::findFreeConnectionSlot() {
 
 // NimBLE host task: only record the device, loop() connects
 void JKBmsBle::ScanCallbacks::onResult(const NimBLEAdvertisedDevice* advertisedDevice) {
-    if (!_parent->_monitoringEnabled) return;  // scan result arriving while monitoring is being turned off
     if (!advertisedDevice->isAdvertisingService(kServiceUuid)) return;
     std::string name = advertisedDevice->getName();
-    if (!startsWith(name, CONFIG_JK_BMS_NAME_PREFIX)) return;
-
     NimBLEAddress address = advertisedDevice->getAddress();
-    ESP_LOGI(TAG, "[SCAN] JK BMS: '%s' %s RSSI=%d", name.c_str(), address.toString().c_str(),
-             advertisedDevice->getRSSI());
+    _parent->recordFound(address, name, advertisedDevice->getRSSI());
+
+    if (!_parent->_monitoringEnabled) return;  // scan result arriving while monitoring is being turned off
 
     // Known device: reconnect if disconnected
     int existingIdx = _parent->findConnectionByAddress(address);
     if (existingIdx >= 0) {
+        ESP_LOGI(TAG, "[SCAN] BMS%d '%s' %s RSSI=%d", existingIdx, name.c_str(),
+                 address.toString().c_str(), advertisedDevice->getRSSI());
         if (!_parent->_connections[existingIdx].connected) {
             _parent->_connections[existingIdx].connectPending = true;
         }
@@ -430,12 +580,24 @@ void JKBmsBle::ScanCallbacks::onResult(const NimBLEAdvertisedDevice* advertisedD
         return;
     }
 
+    // With a selection, only the selected devices (matched by address above) are monitored
+    if (_parent->_selectionMode) return;
+    if (!startsWith(name, CONFIG_JK_BMS_NAME_PREFIX)) return;
+    ESP_LOGI(TAG, "[SCAN] JK BMS: '%s' %s RSSI=%d", name.c_str(), address.toString().c_str(),
+             advertisedDevice->getRSSI());
+
     // Known name with a new address (random MAC)
     for (uint8_t i = 0; i < _parent->_numConnections; i++) {
         BmsConnection& conn = _parent->_connections[i];
         if (conn.name == name && !conn.connected) {
             conn.address = address;
             conn.connectPending = true;
+            xSemaphoreTake(_parent->_dataMutex, portMAX_DELAY);
+            if (i < _parent->_monitored.size()) {
+                _parent->_monitored[i].address = address.toString();
+                _parent->_monitored[i].addressType = address.getType();
+            }
+            xSemaphoreGive(_parent->_dataMutex);
             _parent->stopScanIfAllSlotsKnown();
             return;
         }
@@ -450,6 +612,14 @@ void JKBmsBle::ScanCallbacks::onResult(const NimBLEAdvertisedDevice* advertisedD
     conn.name = name;
     conn.connectionState = BmsConnection::State::DISCONNECTED;
     conn.connectPending = true;
+
+    BmsDeviceId id;
+    id.address = address.toString();
+    id.addressType = address.getType();
+    id.name = name;
+    xSemaphoreTake(_parent->_dataMutex, portMAX_DELAY);
+    _parent->_monitored.push_back(id);
+    xSemaphoreGive(_parent->_dataMutex);
 
     // Publish the slot only after it is fully set up (loop() runs on another task)
     _parent->_numConnections = freeSlot + 1;
@@ -496,6 +666,8 @@ bool JKBmsBle::connectToDevice(uint8_t connIndex) {
         if (!conn.pClient) return false;
         _clientCallbacks[connIndex] = new ClientCallbacks(this, connIndex);
         conn.pClient->setClientCallbacks(_clientCallbacks[connIndex], false);
+        // A device that is out of range would otherwise block this task for 30 s per attempt
+        conn.pClient->setConnectTimeout(kConnectTimeoutMs);
     }
 
     const int maxRetries = 3;
