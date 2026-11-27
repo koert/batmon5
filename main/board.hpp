@@ -34,12 +34,20 @@ inline constexpr bool kLcdInvertColor = true;
 inline constexpr bool kLcdBgrOrder = true;
 
 /* Landscape (320x240): swap XY. If the image is mirrored or upside down,
- * flip kLcdMirrorX / kLcdMirrorY; touch follows the same settings. */
+ * flip kLcdMirrorX / kLcdMirrorY; touch follows the same settings, plus the
+ * touch-only flips below. */
 inline constexpr bool kLcdLandscape = true;
 inline constexpr bool kLcdMirrorX = false;
 inline constexpr bool kLcdMirrorY = false;
 
 /* ---- Touch: FT6336G on I2C (bus shared with ES8311 codec + IIC connector) ---- */
+/* Extra touch flips on top of the display's, on the panel's native portrait axes
+ * (applied before the landscape swap: native X = screen Y). Checked on the
+ * hardware: the FT6336's native X axis runs opposite to the display's, so in
+ * landscape touch was upside down. */
+inline constexpr bool kTouchFlipNativeX = true;
+inline constexpr bool kTouchFlipNativeY = false;
+
 inline constexpr i2c_port_num_t kI2cPort = I2C_NUM_0;
 inline constexpr gpio_num_t kI2cPinSda = GPIO_NUM_16;
 inline constexpr gpio_num_t kI2cPinScl = GPIO_NUM_15;

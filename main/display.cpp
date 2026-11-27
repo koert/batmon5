@@ -104,8 +104,8 @@ esp_err_t touch_init(esp_lcd_touch_handle_t *out_touch)
     tp_cfg.levels.reset = 0;
     tp_cfg.levels.interrupt = 0;
     tp_cfg.flags.swap_xy = board::kLcdLandscape;
-    tp_cfg.flags.mirror_x = board::kLcdMirrorX;
-    tp_cfg.flags.mirror_y = board::kLcdMirrorY;
+    tp_cfg.flags.mirror_x = board::kLcdMirrorX != board::kTouchFlipNativeX;
+    tp_cfg.flags.mirror_y = board::kLcdMirrorY != board::kTouchFlipNativeY;
     return esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, out_touch);
 }
 
