@@ -1,0 +1,14 @@
+menu "JK BMS"
+
+    config JK_BMS_NAME_PREFIX
+        string "BMS device name prefix"
+        default "Accu"
+        help
+            Only BLE devices whose advertised name starts with this text are
+            treated as batteries. Set the names in the JK BMS app.
+
+    config JK_BMS_BLE_DEVICE_NAME
+        string "Own BLE device name"
+        default "BatMon"
+
+endmenu
