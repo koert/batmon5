@@ -72,7 +72,7 @@ public:
     void update(const BatteryData *batteries, uint8_t count, uint8_t slot);
 
 private:
-    static constexpr int kMaxCells = 8;
+    static constexpr int kMaxCells = BatteryData::kMaxCells;
     struct CellRow {
         lv_obj_t *row = nullptr;
         lv_obj_t *bar = nullptr;
@@ -89,6 +89,7 @@ private:
     lv_obj_t *pager_ = nullptr;
     lv_obj_t *soc_bar_ = nullptr;
     lv_obj_t *cell_count_ = nullptr;
+    lv_obj_t *cell_list_ = nullptr;   // scrolls when the cells don't fit
     ValueUnit soc_, voltage_, current_, power_, temp_, diff_;
     std::array<CellRow, kMaxCells> cells_;
 };

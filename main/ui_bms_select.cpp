@@ -66,6 +66,7 @@ void BmsSelectScreen::create(Callbacks callbacks)
     lv_obj_set_flex_grow(list_, 1);
     lv_obj_set_style_pad_ver(list_, 0, 0);
     lv_obj_set_scrollable(list_, true);
+    lv_obj_set_clickable(list_, true);  // scrolling starts from an object that takes the touch
     for (Row &row : rows_) {
         create_row(list_, row);
     }

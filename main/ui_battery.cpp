@@ -21,12 +21,10 @@ using Buf = std::array<char, 24>;
 
 int cell_count(const BatteryData &bat)
 {
-    int n = 0;
-    while (n < 8 && bat.cellVoltages[n] > 0) {
-        n++;
-    }
-    return n;
+    return std::min<int>(bat.cellCount, BatteryData::kMaxCells);
 }
+
+constexpr int kCellPlaceholderRows = 4;  // rows of "--" while there is no data
 
 /* Value text and colour for current, power, voltage and temperatures ("--" without data). */
 void show_voltage(ValueUnit &v, const BatteryData &bat)
@@ -153,6 +151,7 @@ void BatteryListScreen::create(Callbacks callbacks)
     lv_obj_set_style_pad_bottom(list, 6, 0);
     lv_obj_set_style_pad_row(list, 6, 0);
     lv_obj_set_scrollable(list, true);  // more than two batteries
+    lv_obj_set_clickable(list, true);  // scrolling starts from an object that takes the touch
 
     for (uint8_t i = 0; i < cards_.size(); i++) {
         create_card(list, cards_[i], i);
@@ -309,13 +308,22 @@ void BatteryDetailScreen::create(Callbacks callbacks)
     title_create(cells_hdr, "CELLS");
     cell_count_ = text_create(cells_hdr, "", font::kSmall, color::kLabel);
 
-    lv_obj_t *cell_list = box_create(right, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_width(cell_list, LV_PCT(100));
-    lv_obj_set_flex_grow(cell_list, 1);
-    lv_obj_set_scrollable(cell_list, true);  // more than 4 cells
+    /* One row per cell; the list scrolls when the cells don't fit */
+    cell_list_ = box_create(right, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_width(cell_list_, LV_PCT(100));
+    lv_obj_set_flex_grow(cell_list_, 1);
+    lv_obj_set_scrollable(cell_list_, true);
+    lv_obj_set_clickable(cell_list_, true);  // scrolling starts from an object that takes the touch
+    /* Thin scrollbar, so it's visible that more cells follow */
+    lv_obj_set_scrollbar_mode(cell_list_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_width(cell_list_, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(cell_list_, 2, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(cell_list_, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_color(cell_list_, lv_color_hex(color::kLabel), LV_PART_SCROLLBAR);
+    lv_obj_set_style_pad_right(cell_list_, 6, 0);  // keep the values clear of the scrollbar
     for (int i = 0; i < kMaxCells; i++) {
         CellRow &cell = cells_[i];
-        cell.row = box_create(cell_list, LV_FLEX_FLOW_ROW);
+        cell.row = box_create(cell_list_, LV_FLEX_FLOW_ROW);
         lv_obj_set_size(cell.row, LV_PCT(100), 26);
         lv_obj_set_flex_align(cell.row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
@@ -323,7 +331,7 @@ void BatteryDetailScreen::create(Callbacks callbacks)
         Buf n;
         std::snprintf(n.data(), n.size(), "%d", i + 1);
         lv_obj_t *num = text_create(cell.row, n.data(), font::kSmall, color::kLabel);
-        lv_obj_set_width(num, 10);
+        lv_obj_set_width(num, 18);  // room for two digits
         cell.bar = level_bar_create(cell.row, 8);
         lv_obj_set_width(cell.bar, 0);
         lv_obj_set_flex_grow(cell.bar, 1);
@@ -391,7 +399,7 @@ void BatteryDetailScreen::update(const BatteryData *batteries, uint8_t count, ui
     }
     for (int i = 0; i < kMaxCells; i++) {
         CellRow &cell = cells_[i];
-        lv_obj_set_hidden(cell.row, i >= std::max(n, 4));  // 4 placeholder rows without data
+        lv_obj_set_hidden(cell.row, i >= std::max(n, kCellPlaceholderRows));
         if (i >= n) {
             lv_bar_set_value(cell.bar, 0, LV_ANIM_OFF);
             lv_label_set_text(cell.value, "--");

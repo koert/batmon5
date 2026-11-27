@@ -848,39 +848,55 @@ bool JKBmsBle::parseResponse(uint8_t connIndex, const uint8_t* frame, BatteryDat
     out.temp2 = NAN;
 
     // Cell info frame: the esphome jk_bms_ble JK02 cell info frame, in a 24-cell (JK02_24S) or
-    // 32-cell (JK02_32S) variant.
+    // 32-cell (JK02_32S) variant. Cell voltages are uint16 mV from payload[2], 24 or 32 of them;
+    // unused cells read 0, so the cell count is the number of leading cells with a voltage.
+    // In the 32-cell variant everything after the cells is shifted by 32 bytes
+    // (payload offset = esphome frame offset - 4):
+    //   pack voltage  uint32 mV  payload 114 / 146
+    //   current       int32  mA  payload 122 / 154  (positive = charging)
+    // Pick the variant whose pack voltage matches the sum of its cell voltages.
+    struct Variant {
+        uint8_t maxCells;
+        size_t shift;
+    };
+    constexpr Variant kVariants[] = {{24, 0}, {32, 32}};
 
-    // 8 cell voltages at payload[2..17], uint16 mV
-    float cells[8] = {0};
-    uint8_t foundCells = 0;
+    float cells[BatteryData::kMaxCells] = {0};
+    uint8_t cellCount = 0;
     float packVoltage = 0;
-    for (uint8_t i = 0; i < 8; i++) {
-        uint16_t raw = u16At(p, 2 + i * 2);
-        float v = raw * 0.001f;
-        if (v >= 2.5f && v <= 4.5f) {
-            cells[i] = v;
-            packVoltage += v;
-            foundCells++;
-        } else if (raw == 0) {
+    int shift = -1;  // variant not identified
+    for (const Variant& variant : kVariants) {
+        float v[BatteryData::kMaxCells] = {0};
+        uint8_t n = 0;
+        float sum = 0;
+        // Stop at the first cell without a plausible voltage (0 = unused; reading past the
+        // last cell of a 24-cell frame hits other fields)
+        while (n < variant.maxCells) {
+            float cv = u16At(p, 2 + n * 2) * 0.001f;
+            if (cv < 1.0f || cv > 5.0f) break;
+            v[n++] = cv;
+            sum += cv;
+        }
+        if (variant.shift == 0) {
+            // Fallback when no variant matches: the 24-cell layout
+            std::copy(v, v + n, cells);
+            cellCount = n;
+            packVoltage = sum;
+        }
+        float packV = u32At(p, 114 + variant.shift) * 0.001f;
+        if (n > 0 && fabsf(packV - sum) < 0.5f) {
+            std::copy(v, v + BatteryData::kMaxCells, cells);
+            cellCount = n;
+            packVoltage = sum;
+            shift = (int) variant.shift;
             break;
         }
     }
 
-    // Current. In the 32-cell variant everything after the cells is shifted by 32
-    // (payload offset = esphome frame offset - 4):
-    //   pack voltage  uint32 mV  payload 114 / 146
-    //   current       int32  mA  payload 122 / 154  (positive = charging)
-    // Pick the variant whose pack voltage matches the sum of the cell voltages.
-    if (foundCells > 0) {
-        for (size_t shift : {0, 32}) {
-            float packV = u32At(p, 114 + shift) * 0.001f;
-            if (fabsf(packV - packVoltage) < 0.5f) {
-                float current = (int32_t) u32At(p, 122 + shift) * 0.001f;
-                if (current >= -500.0f && current <= 500.0f) {
-                    conn.cachedCurrent = current;
-                }
-                break;
-            }
+    if (shift >= 0) {
+        float current = (int32_t) u32At(p, 122 + shift) * 0.001f;
+        if (current >= -500.0f && current <= 500.0f) {
+            conn.cachedCurrent = current;
         }
     }
     out.current = conn.cachedCurrent;  // last known value if not found
@@ -888,9 +904,10 @@ bool JKBmsBle::parseResponse(uint8_t connIndex, const uint8_t* frame, BatteryDat
     // SOC: at payload[137] (24-cell) or [169] (32-cell); payload[20] is usually a 0 placeholder.
     // Then the cached value, then the first byte that could be a percentage.
     auto socAt = [&](size_t off) -> int { return (p[off] > 0 && p[off] <= 100) ? p[off] : -1; };
-    int soc = socAt(137);
+    int soc = shift >= 0 ? socAt(137 + shift) : -1;
+    if (soc < 0) soc = socAt(137);
     if (soc < 0) soc = socAt(169);
-    if (soc < 0) soc = socAt(20);
+    if (soc < 0 && cellCount <= 9) soc = socAt(20);  // payload[20] is a cell voltage from 10 cells on
     if (soc < 0 && conn.cachedSoc <= 100) soc = conn.cachedSoc;
     for (size_t off = 21; soc < 0 && off < len; off++) {
         if (p[off] <= 100) soc = p[off];
@@ -907,38 +924,13 @@ bool JKBmsBle::parseResponse(uint8_t connIndex, const uint8_t* frame, BatteryDat
     out.temp1 = temps[0];
     out.temp2 = temps[1];
 
-    // Cells not at the expected offset: look for 8 consecutive plausible cell voltages anywhere
-    // (done after the current lookup above, which only trusts cells at the expected offset)
-    if (foundCells == 0) {
-        for (size_t off = 0; off + 16 <= len; off++) {
-            float sum = 0;
-            uint8_t valid = 0;
-            for (uint8_t i = 0; i < 8; i++) {
-                float v = u16At(p, off + i * 2) * 0.001f;
-                if (v >= 2.5f && v <= 4.5f) {
-                    sum += v;
-                    valid++;
-                }
-            }
-            if (valid >= 7) {
-                foundCells = valid;
-                packVoltage = sum;
-                for (uint8_t i = 0; i < 8; i++) {
-                    cells[i] = u16At(p, off + i * 2) * 0.001f;
-                }
-                break;
-            }
-        }
-    }
-
     out.voltage = packVoltage;
+    out.cellCount = cellCount;
     float minV = 5.0f, maxV = 0.0f;
-    for (uint8_t i = 0; i < foundCells && i < 8; i++) {
+    for (uint8_t i = 0; i < cellCount; i++) {
         out.cellVoltages[i] = cells[i];
-        if (cells[i] > 0) {
-            minV = std::min(minV, cells[i]);
-            maxV = std::max(maxV, cells[i]);
-        }
+        minV = std::min(minV, cells[i]);
+        maxV = std::max(maxV, cells[i]);
     }
     out.cellDiff = maxV >= minV ? maxV - minV : 0.0f;
     return true;
@@ -952,8 +944,9 @@ void JKBmsBle::mergeBatteryData(BmsConnection& conn, const BatteryData& parsed) 
     BatteryData& bat = _batteries[conn.batteryIndex];
     if (parsed.voltage > 0) bat.voltage = parsed.voltage;
     bat.current = parsed.current;  // 0 is valid (no load)
-    for (uint8_t i = 0; i < 8; i++) {
-        if (parsed.cellVoltages[i] > 0) bat.cellVoltages[i] = parsed.cellVoltages[i];
+    if (parsed.cellCount > 0) {
+        bat.cellCount = parsed.cellCount;
+        std::copy(parsed.cellVoltages, parsed.cellVoltages + BatteryData::kMaxCells, bat.cellVoltages);
     }
     bat.cellDiff = parsed.cellDiff;
     if (parsed.soc >= 0 && parsed.soc <= 100) {
@@ -968,7 +961,7 @@ void JKBmsBle::mergeBatteryData(BmsConnection& conn, const BatteryData& parsed) 
     xSemaphoreGive(_dataMutex);
 
     // Log outside the lock
-    ESP_LOGI(TAG, "[BMS%d] %s: V=%.2f I=%.2f SOC=%d%% T=%.1f/%.1f",
+    ESP_LOGI(TAG, "[BMS%d] %s: V=%.2f I=%.2f SOC=%d%% T=%.1f/%.1f cells=%dS diff=%.3f",
              conn.batteryIndex, logged.bmsName.c_str(), logged.voltage, logged.current,
-             (int) logged.soc, logged.temp1, logged.temp2);
+             (int) logged.soc, logged.temp1, logged.temp2, logged.cellCount, logged.cellDiff);
 }
